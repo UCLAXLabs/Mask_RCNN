@@ -20,6 +20,9 @@ from matplotlib import patches,  lines
 from matplotlib.patches import Polygon
 import IPython.display
 
+# PMB
+from PIL import Image
+
 # Root directory of the project
 ROOT_DIR = os.path.abspath("../")
 
@@ -44,7 +47,9 @@ def display_images(images, titles=None, cols=4, cmap=None, norm=None,
     """
     titles = titles if titles is not None else [""] * len(images)
     rows = len(images) // cols + 1
+
     plt.figure(figsize=(14, 14 * rows // cols))
+
     i = 1
     for image, title in zip(images, titles):
         plt.subplot(rows, cols, i)
@@ -55,6 +60,89 @@ def display_images(images, titles=None, cols=4, cmap=None, norm=None,
         i += 1
     plt.show()
 
+def cut_out_masks(image, boxes, masks, class_ids, class_names,
+                  scores=None, captions=None, image_prefix=""):
+    """
+    boxes: [num_instance, (y1, x1, y2, x2, class_id)] in image coordinates.
+    masks: [height, width, num_instances]
+    class_ids: [num_instances]
+    class_names: list of class names of the dataset
+    scores: (optional) confidence scores for each box
+    captions: (optional) A list of strings to use as captions for each object
+    """
+    # Number of instances
+    N = boxes.shape[0]
+    if not N:
+        print("\n*** No instances to display *** \n")
+    else:
+        assert boxes.shape[0] == masks.shape[-1] == class_ids.shape[0]
+   
+    if (image_prefix != ""):
+        image_prefix += '_'
+
+    print("IMAGE DIMENSIONS: " + str(image.shape))
+
+    height, width = image.shape[:2]
+
+    # Convert grayscale to RGB
+    if (len(image.shape) == 2):
+        print("ERROR: image still grayscale")
+
+    # Add the alpha channel if it isn't already there
+    if (image.shape[2] == 3):
+      image = np.dstack( ( image, np.ones((height, width)) ) )
+    print("NEW IMAGE DIMENSIONS: " + str(image.shape))
+
+    #image_pil = Image.fromarray(image).convert('RGB')
+    #im_width, im_height = image_pil.size
+
+    for i in range(N):
+
+        # PMB It's easiest to make a copy of the original image every time,
+        # since we don't want overlapping masks in the cutout images
+        masked_image = image.astype(np.uint32).copy()
+
+        # Bounding box
+        if not np.any(boxes[i]):
+            # Skip this instance. Has no bbox. Likely lost in image cropping.
+            continue
+        y1, x1, y2, x2 = boxes[i]
+
+        # Label
+        if not captions:
+            class_id = class_ids[i]
+            score = scores[i] if scores is not None else None
+            label = class_names[class_id]
+            x = random.randint(x1, (x1 + x2) // 2)
+            caption = "{} {:.3f}".format(label, score) if score else label
+        else:
+            caption = captions[i]
+
+        # Mask
+        mask = masks[:, :, i]
+
+        # Mask Polygon
+        # Pad to ensure proper polygons for masks that touch image edges.
+        #padded_mask = np.zeros(
+        #    (mask.shape[0] + 2, mask.shape[1] + 2), dtype=np.uint8)
+        #padded_mask[1:-1, 1:-1] = mask
+        #contours = find_contours(padded_mask, 0.5)
+        #for verts in contours:
+        #    # Subtract the padding and flip (y, x) to (x, y)
+        #    verts = np.fliplr(verts) - 1
+        #    p = Polygon(verts, facecolor="none", edgecolor="black")
+
+        # Idea: transparency mask -- set alpha to 0 for everything not in the mask
+        masked_image = transparent_mask(masked_image, mask)
+
+        # PMB just using the bounding box for now
+        cropped_image = masked_image[y1:y2,x1:x2,:]
+
+        if (not os.path.exists('cutouts_small')):
+            os.makedirs('cutouts_small')
+        imTitle = 'cutouts_small/' + image_prefix + caption.replace(" ", '_') + '.png'
+        #plt.imsave(imTitle, cropped_image.astype(np.uint8), format='png')
+        plt.imsave(imTitle, cropped_image, format='png')
 
 def random_colors(N, bright=True):
     """
@@ -67,6 +155,12 @@ def random_colors(N, bright=True):
     colors = list(map(lambda c: colorsys.hsv_to_rgb(*c), hsv))
     random.shuffle(colors)
     return colors
+
+def transparent_mask(image, mask):
+    #for c in range(image.shape[2]):
+    #    image[:, :, c] = np.where(mask == 0, 0, image[:, :, c])
+    image[:, :, 3] = np.where(mask == 0, 0, 255)
+    return image
 
 
 def apply_mask(image, mask, color, alpha=0.5):
@@ -300,8 +394,7 @@ def display_top_masks(image, mask, class_ids, class_names, limit=4):
         m = np.sum(m * np.arange(1, m.shape[-1] + 1), -1)
         to_display.append(m)
         titles.append(class_names[class_id] if class_id != -1 else "-")
-    display_images(to_display, titles=titles, cols=limit + 1, cmap="Blues_r")
-
+    display_images(to_display, titles=titles, cols=limit + 1, cmap="Blues_r", saveNotDisplay=saveNotDisplay)
 
 def plot_precision_recall(AP, precisions, recalls):
     """Draw the precision-recall curve.
